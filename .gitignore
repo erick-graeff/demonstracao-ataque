@@ -1,0 +1,10 @@
+briefing.txt
+guia.txt
+test.txt
+helper
+libphp.so
+__pycache__/
+saida*.txt
+*.html
+docker/
+52704
