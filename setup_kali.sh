@@ -15,7 +15,7 @@ set -eu
 REPO="https://raw.githubusercontent.com/erick-graeff/demonstracao-ataque/refs/heads/main"
 
 echo "[*] Baixando arquivos..."
-curl -s "$REPO/exploit-orig.py" -o exploit.py
+curl -s "$REPO/exploit.py"
 curl -sO "$REPO/run_shell.sh"
 curl -sO "$REPO/run_exploit.sh"
 curl -sO "$REPO/run_all.sh"
