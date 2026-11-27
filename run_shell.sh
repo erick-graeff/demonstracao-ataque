@@ -5,7 +5,7 @@
 #   ./run_shell.sh                    → usa $IP ou 192.168.127.10
 #   ./run_shell.sh <target> [porta]   → target e porta específicos
 #
-# Requisitos: exploit-orig.py no mesmo diretório, python3, nc
+# Requisitos: exploit.py no mesmo diretório, python3, nc
 #
 # O script faz tudo sozinho:
 #   1. Detecta o IP do Kali
@@ -23,14 +23,14 @@ SPORT=8080
 MAX_ATTEMPTS=15
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-EXPLOIT="$SCRIPT_DIR/exploit-orig.py"
+EXPLOIT="$SCRIPT_DIR/exploit.py"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 # ─── Verificações ────────────────────────────────────────────
 if [ ! -f "$EXPLOIT" ]; then
-    echo -e "${RED}[!] exploit-orig.py não encontrado em $SCRIPT_DIR${NC}"
+    echo -e "${RED}[!] exploit.py não encontrado em $SCRIPT_DIR${NC}"
     exit 1
 fi
 

