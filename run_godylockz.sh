@@ -8,8 +8,7 @@
 
 URL="${1:-http://${IP:-192.168.170.10}/index.php}"
 HOST=$(echo "$URL" | sed -E 's|https?://([^:/]+).*|\1|')
-PORT=$(echo "$URL" | sed -E 's|.*:([0-9]+)/.*|\1|')
-PORT=${PORT:-80}
+PORT=$(echo "$URL" | grep -oP '://[^:/]+:\K[0-9]+' || echo 80)
 
 echo "[*] Alvo: $URL"
 echo "[*] Exploit: php2shell.py (godylockz/EDB-52704)"
